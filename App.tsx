@@ -32,39 +32,13 @@ const App: React.FC = () => {
   const [generatedImage, setGeneratedImage] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState<boolean>(false);
   const [error, setError] = useState<string | null>(null);
-  
-  const [isKeyReady, setIsKeyReady] = useState<boolean>(false);
 
   const debouncedPrompt = useDebounce(prompt, 500);
   const debouncedPoseImage = useDebounce(poseImage, 500);
 
-  useEffect(() => {
-    const checkApiKey = async () => {
-        try {
-            if (window.aistudio && await window.aistudio.hasSelectedApiKey()) {
-                setIsKeyReady(true);
-            }
-        } catch (e) {
-            console.error("Error checking for API key:", e)
-        }
-    };
-    checkApiKey();
-  }, []);
-
-  const handleSelectKey = async () => {
-    try {
-        await window.aistudio.openSelectKey();
-        // Assume success to handle race condition where hasSelectedApiKey is not immediately true
-        setIsKeyReady(true);
-    } catch (e) {
-        console.error("Could not open API key selection:", e);
-        setError("Failed to open the API key selection dialog. Please try again.");
-    }
-  };
-
   // Effect to generate pose description preview
   useEffect(() => {
-    if (!poseSourceMode || !isKeyReady) return;
+    if (!poseSourceMode) return;
 
     const getPoseDescription = async () => {
       if (poseSourceMode === 'text' && debouncedPrompt.trim()) {
@@ -106,7 +80,7 @@ const App: React.FC = () => {
     };
     
     getPoseDescription();
-  }, [debouncedPrompt, debouncedPoseImage, poseSourceMode, isKeyReady]);
+  }, [debouncedPrompt, debouncedPoseImage, poseSourceMode]);
 
   const handleBaseImageUpload = (file: File) => {
     if (baseImage) {
@@ -180,8 +154,7 @@ const App: React.FC = () => {
             const errorMessage = (err instanceof Error) ? err.message : "An unknown error occurred.";
             
             if (errorMessage.includes("Requested entity was not found.")) {
-                setError("Your API key is invalid or missing permissions. Please select a valid key.");
-                setIsKeyReady(false);
+                setError("Your API key seems to be invalid. Please double-check the key in services/geminiService.ts.");
                 break;
             } else if (errorMessage.includes("POSE_DETECTION_FAILED")) {
                 setError("Pose not detected clearly — try a clearer or single-person image.");
@@ -237,22 +210,6 @@ const App: React.FC = () => {
     setPrompt('');
     setShowDescriptionEditor(false);
     setPoseDescription('');
-  }
-
-  if (!isKeyReady) {
-    return (
-        <div className="min-h-screen bg-gray-50 flex flex-col items-center justify-center p-4 text-center">
-            <div className="w-full max-w-md bg-white p-8 rounded-2xl shadow-lg border border-gray-200">
-                 <h1 className="text-3xl font-bold text-gray-800 mb-4">Welcome to Rex Pose Creator</h1>
-                 <p className="text-gray-600 mb-6">To get started, please select a Gemini API key. Your key is stored securely and is required to power the AI generation features.</p>
-                 <Button onClick={handleSelectKey} className="w-full">Select API Key to Continue</Button>
-                 <p className="text-xs text-gray-500 mt-4">
-                    For more information on billing, see the <a href="https://ai.google.dev/gemini-api/docs/billing" target="_blank" rel="noopener noreferrer" className="text-indigo-600 hover:underline">Gemini API documentation</a>.
-                 </p>
-                 {error && <p className="text-red-600 bg-red-100 p-3 rounded-lg mt-4 font-medium">{error}</p>}
-            </div>
-        </div>
-    );
   }
 
   return (

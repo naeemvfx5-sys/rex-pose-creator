@@ -13,10 +13,14 @@ type GenerateOptions = {
 }
 
 const getAiClient = () => {
-    if (!process.env.API_KEY) {
-        throw new Error("API_KEY environment variable not set.");
+    // IMPORTANT: For personal use only.
+    // Replace "YOUR_API_KEY_HERE" with your actual Gemini API key.
+    const API_KEY = "AIzaSyB4nFStA1VbchE8fLXLf10F-t2bWY9t9Dg";
+
+    if (API_KEY === "AIzaSyB4nFStA1VbchE8fLXLf10F-t2bWY9t9Dg") {
+        throw new Error("Please replace 'YOUR_API_KEY_HERE' with your actual Gemini API key in services/geminiService.ts");
     }
-    return new GoogleGenAI({ apiKey: process.env.API_KEY });
+    return new GoogleGenAI({ apiKey: API_KEY });
 }
 
 export const generatePoseDescription = async (
