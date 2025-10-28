@@ -1,11 +1,4 @@
-
 import { GoogleGenAI, Modality, Part } from "@google/genai";
-
-if (!process.env.API_KEY) {
-    throw new Error("API_KEY environment variable not set");
-}
-
-const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
 
 type ImagePayload = {
     data: string; // base64
@@ -23,6 +16,11 @@ export const generatePose = async (
     options: GenerateOptions
 ): Promise<string> => {
     
+    if (!process.env.API_KEY) {
+        throw new Error("API_KEY environment variable not set. Please follow the deployment instructions to set your API key.");
+    }
+    const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+
     const { mode, poseImage, userPrompt } = options;
     let instructionPrompt: string;
     const parts: Part[] = [
