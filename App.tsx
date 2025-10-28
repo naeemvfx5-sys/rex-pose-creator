@@ -1,11 +1,12 @@
 
 import React, { useState, useEffect, useCallback } from 'react';
 import { useLocalStorage } from './hooks/useLocalStorage';
+import { useDebounce } from './hooks/useDebounce';
 import { ImageUploader } from './components/ImageUploader';
 import { Button } from './components/Button';
 import { Spinner } from './components/Spinner';
 import { DownloadIcon, RetryIcon } from './components/icons';
-import { generatePose } from './services/geminiService';
+import { generatePose, generatePoseDescription } from './services/geminiService';
 import { fileToBase64 } from './utils/fileUtils';
 
 type ImageFile = {
@@ -23,10 +24,63 @@ const App: React.FC = () => {
   const [poseImage, setPoseImage] = useState<ImageFile | null>(null);
   const [prompt, setPrompt] = useState<string>('');
   const [poseSourceMode, setPoseSourceMode] = useState<'text' | 'image' | null>(null);
+  
+  // New state for the two-step generation process
+  const [poseDescription, setPoseDescription] = useState<string>('');
+  const [isPreviewLoading, setIsPreviewLoading] = useState<boolean>(false);
+  const [showDescriptionEditor, setShowDescriptionEditor] = useState<boolean>(false);
+
   const [generatedImage, setGeneratedImage] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState<boolean>(false);
   const [error, setError] = useState<string | null>(null);
   
+  const debouncedPrompt = useDebounce(prompt, 500);
+  const debouncedPoseImage = useDebounce(poseImage, 500);
+
+  // Effect to generate pose description preview
+  useEffect(() => {
+    if (!poseSourceMode) return;
+
+    const getPoseDescription = async () => {
+      if (poseSourceMode === 'text' && debouncedPrompt.trim()) {
+        setIsPreviewLoading(true);
+        setError(null);
+        try {
+          const description = await generatePoseDescription(null, debouncedPrompt);
+          setPoseDescription(description);
+          setShowDescriptionEditor(true);
+        } catch (err) {
+          setError("Could not generate pose description.");
+          setShowDescriptionEditor(false);
+        } finally {
+          setIsPreviewLoading(false);
+        }
+      } else if (poseSourceMode === 'image' && debouncedPoseImage) {
+        setIsPreviewLoading(true);
+        setError(null);
+        try {
+          const imagePayload = {
+            data: await fileToBase64(debouncedPoseImage.file),
+            mimeType: debouncedPoseImage.file.type
+          };
+          const description = await generatePoseDescription(imagePayload, null);
+          setPoseDescription(description);
+          setShowDescriptionEditor(true);
+        } catch (err) {
+          setError("Could not generate pose description from image.");
+          setShowDescriptionEditor(false);
+        } finally {
+          setIsPreviewLoading(false);
+        }
+      } else {
+        setShowDescriptionEditor(false);
+        setPoseDescription('');
+      }
+    };
+    
+    getPoseDescription();
+  }, [debouncedPrompt, debouncedPoseImage, poseSourceMode]);
+
   const handleBaseImageUpload = (file: File) => {
     if (baseImage) {
       const isConfirmed = window.confirm("Replace permanent Rex reference? This will change the identity used for all future pose generations.");
@@ -53,6 +107,7 @@ const App: React.FC = () => {
       setGeneratedImage(null);
       setError(null);
       setPoseSourceMode(null);
+      setShowDescriptionEditor(false);
     }
   };
 
@@ -61,35 +116,61 @@ const App: React.FC = () => {
       file,
       preview: URL.createObjectURL(file)
     });
+    setPrompt(''); // Clear text prompt when image is uploaded
   };
   
   const handleGenerate = useCallback(async () => {
-    if (!baseImage || !poseSourceMode) return;
+    if (!baseImage || !poseDescription) return;
 
     setIsLoading(true);
     setError(null);
     setGeneratedImage(null);
+    
+    // Internal Usage Log
+    console.log({
+      event: 'generation_start',
+      timestamp: new Date().toISOString(),
+      mode: poseSourceMode,
+      prompt: poseDescription,
+    });
 
-    try {
-      const poseImagePayload = (poseSourceMode === 'image' && poseImage) ? {
-        data: await fileToBase64(poseImage.file),
-        mimeType: poseImage.file.type
-      } : null;
+    let success = false;
+    for (let i = 0; i < 3 && !success; i++) { // Attempt up to 3 times (1 initial + 2 retries)
+        if (i > 0) console.log(`Attempt ${i + 1} to generate pose...`);
+        try {
+            const poseImagePayload = (poseSourceMode === 'image' && poseImage) ? {
+                data: await fileToBase64(poseImage.file),
+                mimeType: poseImage.file.type
+            } : null;
 
-      const result = await generatePose(baseImage, {
-          mode: poseSourceMode,
-          poseImage: poseImagePayload,
-          userPrompt: prompt
-      });
-      setGeneratedImage(`data:image/png;base64,${result}`);
-    } catch (err) {
-      console.error(err);
-      const errorMessage = (err instanceof Error) ? err.message : "An unknown error occurred.";
-      setError(`Failed to generate image. ${errorMessage}`);
-    } finally {
-      setIsLoading(false);
+            const result = await generatePose(baseImage, {
+                mode: poseSourceMode as 'text' | 'image',
+                poseImage: poseImagePayload,
+                poseDescription: poseDescription
+            });
+            setGeneratedImage(`data:image/png;base64,${result}`);
+            success = true; // Break loop on success
+        } catch (err) {
+            console.error(err);
+            const errorMessage = (err instanceof Error) ? err.message : "An unknown error occurred.";
+            
+            // Handle specific, non-retriable validation errors
+            if (errorMessage.includes("POSE_DETECTION_FAILED")) {
+                setError("Pose not detected clearly — try a clearer or single-person image.");
+                break; // Don't retry if pose detection fails
+            } else if (errorMessage.includes("MULTIPLE_PEOPLE_DETECTED")) {
+                setError("Multiple people detected — please crop to one person for best accuracy.");
+                break; // Don't retry for this error
+            }
+            
+            // For generic errors, set message and allow loop to retry
+            setError(`Failed to generate image (attempt ${i+1}). ${errorMessage}`);
+        }
     }
-  }, [baseImage, poseImage, prompt, poseSourceMode]);
+
+    setIsLoading(false);
+
+  }, [baseImage, poseImage, poseDescription, poseSourceMode]);
 
   const handleTryNewPose = () => {
     setGeneratedImage(null);
@@ -97,6 +178,8 @@ const App: React.FC = () => {
     setPrompt('');
     setError(null);
     setPoseSourceMode(null);
+    setShowDescriptionEditor(false);
+    setPoseDescription('');
   };
 
   const handleDownload = () => {
@@ -110,27 +193,23 @@ const App: React.FC = () => {
   };
   
   useEffect(() => {
+    const previewUrl = poseImage?.preview;
     return () => {
-      if (poseImage) {
-        URL.revokeObjectURL(poseImage.preview);
+      if (previewUrl) {
+        URL.revokeObjectURL(previewUrl);
       }
     };
   }, [poseImage]);
 
-  const isGenerateDisabled = 
-    isLoading || 
-    !baseImage || 
-    !poseSourceMode ||
-    (poseSourceMode === 'image' && !poseImage) ||
-    (poseSourceMode === 'text' && !prompt.trim());
+  const isGenerateDisabled = isLoading || !poseDescription;
 
-  let validationMessage = '';
-  if (baseImage && !poseSourceMode) {
-    validationMessage = 'Choose whether to generate from Text or Pose Image.';
-  } else if (poseSourceMode === 'image' && !poseImage) {
-    validationMessage = 'Please upload a pose reference image to continue.';
-  } else if (poseSourceMode === 'text' && !prompt.trim()) {
-    validationMessage = 'Please describe the desired pose in the text prompt.';
+  const handlePoseSourceChange = (mode: 'text' | 'image') => {
+    setPoseSourceMode(mode);
+    setError(null);
+    setPoseImage(null);
+    setPrompt('');
+    setShowDescriptionEditor(false);
+    setPoseDescription('');
   }
 
   return (
@@ -142,6 +221,7 @@ const App: React.FC = () => {
         </header>
 
         <main className="space-y-12">
+          {/* Step 1: Base Character */}
           <section className="bg-white p-6 rounded-2xl shadow-lg border border-gray-200">
             <h2 className="text-2xl font-semibold text-gray-700 mb-4">1. Base Character</h2>
             <div className="grid grid-cols-1 md:grid-cols-2 gap-6 items-center">
@@ -156,7 +236,6 @@ const App: React.FC = () => {
                     <div className="flex justify-center md:justify-start items-center gap-4">
                         <img src={`data:${baseImage.mimeType};base64,${baseImage.data}`} alt="Base Character Preview" className="w-24 h-24 rounded-lg object-cover shadow-md" />
                         <div className="flex flex-col gap-2">
-                             {/* FIX: The `size` prop was not defined on the Button component, and sizing was being handled by a redundant `className`. The Button component has been updated to accept a `size` prop, and the redundant `className` has been removed. */}
                              <Button onClick={() => document.querySelector<HTMLInputElement>('input[type="file"]')?.click()} variant="secondary" size="sm">Replace</Button>
                              <Button onClick={handleDeleteBaseImage} variant="danger" size="sm">Delete</Button>
                         </div>
@@ -169,48 +248,68 @@ const App: React.FC = () => {
             </div>
           </section>
 
+          {/* Step 2: Provide Pose Source */}
           {baseImage && (
             <section className="bg-white p-6 rounded-2xl shadow-lg border border-gray-200">
-              <h2 className="text-2xl font-semibold text-gray-700 mb-4">2. Generate New Pose</h2>
+              <h2 className="text-2xl font-semibold text-gray-700 mb-4">2. Provide Pose Source</h2>
               
               <fieldset className="mb-6">
-                <legend className="block text-md font-medium text-gray-700 mb-2">Choose Pose Source</legend>
                 <div className="flex gap-4">
                     <label className={`flex items-center p-3 border rounded-lg cursor-pointer flex-1 justify-center ${poseSourceMode === 'text' ? 'bg-indigo-50 border-indigo-500' : 'border-gray-300'}`}>
-                        <input type="radio" name="pose-source" value="text" checked={poseSourceMode === 'text'} onChange={() => setPoseSourceMode('text')} className="w-4 h-4 text-indigo-600 border-gray-300 focus:ring-indigo-500" />
+                        <input type="radio" name="pose-source" value="text" checked={poseSourceMode === 'text'} onChange={() => handlePoseSourceChange('text')} className="w-4 h-4 text-indigo-600 border-gray-300 focus:ring-indigo-500" />
                         <span className="ml-3 block text-sm font-medium text-gray-700">Use Text Prompt</span>
                     </label>
                     <label className={`flex items-center p-3 border rounded-lg cursor-pointer flex-1 justify-center ${poseSourceMode === 'image' ? 'bg-indigo-50 border-indigo-500' : 'border-gray-300'}`}>
-                        <input type="radio" name="pose-source" value="image" checked={poseSourceMode === 'image'} onChange={() => setPoseSourceMode('image')} className="w-4 h-4 text-indigo-600 border-gray-300 focus:ring-indigo-500" />
+                        <input type="radio" name="pose-source" value="image" checked={poseSourceMode === 'image'} onChange={() => handlePoseSourceChange('image')} className="w-4 h-4 text-indigo-600 border-gray-300 focus:ring-indigo-500" />
                         <span className="ml-3 block text-sm font-medium text-gray-700">Use Pose Image</span>
                     </label>
                 </div>
               </fieldset>
 
               <div className="grid grid-cols-1 lg:grid-cols-2 gap-8 items-start">
-                <div className={`space-y-4 transition-opacity duration-300 ${poseSourceMode !== 'text' ? 'opacity-40' : 'opacity-100'}`}>
-                  <label htmlFor="prompt" className="block text-md font-medium text-gray-700">Describe Rex’s New Pose {poseSourceMode === 'image' && '(Modifiers)'}</label>
-                  <textarea
-                    id="prompt"
-                    value={prompt}
-                    onChange={(e) => setPrompt(e.target.value)}
-                    placeholder={poseSourceMode === 'image' ? "e.g., weak muscles, sweaty" : "e.g. Rex doing push-ups, side view"}
-                    className="w-full h-32 p-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 transition duration-150 ease-in-out"
-                    disabled={poseSourceMode !== 'text' && poseSourceMode !== 'image'}
-                  />
-                </div>
-                <div className={`space-y-4 transition-opacity duration-300 ${poseSourceMode !== 'image' ? 'opacity-40' : 'opacity-100'}`}>
-                  <label className="block text-md font-medium text-gray-700">Upload a Pose Reference Image</label>
-                  <ImageUploader onFileUpload={handlePoseImageUpload} label="Upload Pose Reference" existingPreview={poseImage?.preview} />
-                </div>
-              </div>
-              <div className="mt-8 text-center">
-                <Button onClick={handleGenerate} disabled={isGenerateDisabled} className="w-full sm:w-auto">
-                  {isLoading ? <Spinner /> : 'Generate Pose'}
-                </Button>
-                {validationMessage && <p className="mt-4 text-sm text-yellow-700 bg-yellow-50 p-3 rounded-md">{validationMessage}</p>}
+                 <div className={`space-y-4 transition-opacity duration-300 ${poseSourceMode !== 'text' ? 'opacity-40 pointer-events-none' : 'opacity-100'}`}>
+                   <label htmlFor="prompt" className="block text-md font-medium text-gray-700">Describe Rex’s New Pose</label>
+                   <textarea
+                     id="prompt"
+                     value={prompt}
+                     onChange={(e) => setPrompt(e.target.value)}
+                     placeholder={"e.g. Rex doing push-ups, side view"}
+                     className="w-full h-32 p-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 transition duration-150 ease-in-out"
+                     disabled={poseSourceMode !== 'text'}
+                   />
+                 </div>
+                 <div className={`space-y-4 transition-opacity duration-300 ${poseSourceMode !== 'image' ? 'opacity-40 pointer-events-none' : 'opacity-100'}`}>
+                   <label className="block text-md font-medium text-gray-700">Upload a Pose Reference Image</label>
+                   <ImageUploader onFileUpload={handlePoseImageUpload} label="Upload Pose Reference" existingPreview={poseImage?.preview} />
+                 </div>
               </div>
             </section>
+          )}
+          
+          {/* Step 3: Confirm Pose & Generate */}
+          {baseImage && poseSourceMode && (
+             <section className="bg-white p-6 rounded-2xl shadow-lg border border-gray-200">
+                <h2 className="text-2xl font-semibold text-gray-700 mb-4">3. Confirm Pose & Generate</h2>
+                 {isPreviewLoading && <p className="text-center text-gray-600 animate-pulse">Processing pose...</p>}
+
+                {showDescriptionEditor && !isPreviewLoading && (
+                    <div className="space-y-4">
+                        <label htmlFor="poseDescription" className="block text-md font-medium text-gray-700">Pose Description Preview</label>
+                        <p className="text-sm text-gray-500">The AI interpreted your input as the following pose. You can edit this text to refine the result before generating.</p>
+                        <textarea
+                            id="poseDescription"
+                            value={poseDescription}
+                            onChange={(e) => setPoseDescription(e.target.value)}
+                            className="w-full h-24 p-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500"
+                        />
+                        <div className="text-center">
+                             <Button onClick={handleGenerate} disabled={isGenerateDisabled} className="w-full sm:w-auto">
+                               {isLoading ? <Spinner /> : 'Confirm & Generate Pose'}
+                             </Button>
+                        </div>
+                    </div>
+                )}
+             </section>
           )}
 
           {isLoading && (
@@ -219,10 +318,13 @@ const App: React.FC = () => {
                 <p className="text-lg text-indigo-600 animate-pulse">Generating your masterpiece... this can take a moment.</p>
             </div>
           )}
+
           {error && <p className="text-center text-red-600 bg-red-100 p-4 rounded-lg font-medium">{error}</p>}
-          {generatedImage && (
+          
+          {/* Step 4: Your New Pose */}
+          {generatedImage && !isLoading && (
             <section className="bg-white p-6 rounded-2xl shadow-lg border border-gray-200 text-center">
-              <h2 className="text-2xl font-semibold text-gray-700 mb-4">3. Your New Pose</h2>
+              <h2 className="text-2xl font-semibold text-gray-700 mb-4">4. Your New Pose</h2>
               <div className="flex justify-center mb-6">
                 <img src={generatedImage} alt="Generated Pose" className="max-w-full h-auto max-h-96 rounded-lg shadow-2xl bg-white" />
               </div>
