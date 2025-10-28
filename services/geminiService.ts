@@ -16,8 +16,11 @@ export const generatePose = async (
     options: GenerateOptions
 ): Promise<string> => {
     
+    // Moved API Key check from the top-level to inside the function.
+    // This allows the app UI to load without crashing.
+    // The check now happens only when the user clicks "Generate".
     if (!process.env.API_KEY) {
-        throw new Error("API_KEY environment variable not set. Please follow the deployment instructions to set your API key.");
+        throw new Error("API_KEY environment variable not set. Please follow the deployment instructions to set your API key in your hosting provider's settings (e.g., Vercel, Netlify).");
     }
     const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
 
