@@ -2,15 +2,18 @@
 import * as functions from "firebase-functions";
 import { GoogleGenAI, Modality, Part } from "@google/genai";
 import * as cors from "cors";
+// FIX: Import Request and Response from express to resolve type conflicts
+// with global DOM types that were causing compilation errors.
+import { Request, Response } from "express";
 
 // Initialize CORS middleware
 const corsHandler = cors({ origin: true });
 
-// Get the API key from the environment configuration.
-// This is the secure way to store secrets.
-const API_KEY = functions.config().gemini.key;
+// Get the API key from Vercel's environment variables.
+// This is the standard and secure way to store secrets on Vercel.
+const API_KEY = process.env.GEMINI_KEY;
 if (!API_KEY) {
-  throw new Error("Gemini API Key not found in function configuration.");
+  throw new Error("Gemini API Key not found in environment variables.");
 }
 const ai = new GoogleGenAI({ apiKey: API_KEY });
 
@@ -29,7 +32,7 @@ type GenerateOptions = {
 // FIX: Added explicit types for `req` and `res` to resolve TypeScript errors
 // caused by incorrect type inference, which was likely conflicting with global
 // DOM types.
-export const generatePose = functions.https.onRequest((req: functions.https.Request, res: functions.Response) => {
+export const generatePose = functions.https.onRequest((req: Request, res: Response) => {
   // Handle CORS for the request.
   corsHandler(req, res, async () => {
     if (req.method !== "POST") {
