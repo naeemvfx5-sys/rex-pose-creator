@@ -1,5 +1,4 @@
-import { GoogleGenAI, Modality, Part } from "@google/genai";
-
+// These types are now just for defining the structure of the data we send to our backend.
 type ImagePayload = {
     data: string; // base64
     mimeType: string;
@@ -11,79 +10,48 @@ type GenerateOptions = {
     userPrompt: string;
 }
 
+/**
+ * Sends a request to our secure backend Firebase Function to generate a pose.
+ * The backend will handle the Gemini API call securely.
+ * @param baseImage The base character image.
+ * @param options The generation options (mode, pose image, prompt).
+ * @returns A promise that resolves to the base64 string of the generated image.
+ */
 export const generatePose = async (
     baseImage: ImagePayload,
     options: GenerateOptions
 ): Promise<string> => {
     
-    // Moved API Key check from the top-level to inside the function.
-    // This allows the app UI to load without crashing.
-    // The check now happens only when the user clicks "Generate".
-    if (!process.env.API_KEY) {
-        throw new Error("API_KEY environment variable not set. Please follow the deployment instructions to set your API key in your hosting provider's settings (e.g., Vercel, Netlify).");
-    }
-    const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+    // The URL for our Firebase Function. We use a relative path, and Firebase Hosting
+    // will automatically rewrite this request to our backend function.
+    const functionUrl = '/generatePose';
 
-    const { mode, poseImage, userPrompt } = options;
-    let instructionPrompt: string;
-    const parts: Part[] = [
-        { inlineData: { mimeType: baseImage.mimeType, data: baseImage.data } },
-    ];
+    try {
+        const response = await fetch(functionUrl, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+            },
+            // Send all the necessary data in the request body.
+            body: JSON.stringify({ baseImage, options }),
+        });
 
-    if (mode === 'image') {
-        if (!poseImage) {
-            throw new Error("A pose image is required when using image mode.");
+        const result = await response.json();
+
+        if (!response.ok) {
+            // If the backend returned an error, we'll throw it so the UI can display it.
+            throw new Error(result.error || `Request failed with status ${response.status}`);
         }
-        instructionPrompt = `
-            You are a precision pose-transfer AI. Your task is to extract a pose from a reference image and apply it to a base character with 100% accuracy, then apply minor modifiers.
 
-            **Critical Rules:**
-            1.  **Identity Lock:** The FIRST image is the **Base Character (Rex)**. Its face, outfit, art style, colors, and proportions are SACRED. You must preserve them perfectly.
-            2.  **Pose Source:** The SECOND image is the **Pose Reference**. Use it ONLY to extract a pose skeleton (like ControlNet/OpenPose keypoints). IGNORE its style, colors, clothing, and character.
-            3.  **100% Pose Replication:** Replicate the pose from the Pose Reference with absolute precision. If the pose is awkward, unbalanced, or biomechanically incorrect, you MUST copy that exact incorrect pose. DO NOT "correct" or "improve" the form. Map the joint positions and limb angles precisely to the Base Character's proportions.
-            4.  **Modifiers:** The user prompt provides optional modifiers (e.g., 'weak muscles', 'sweaty'). Apply these ONLY AFTER the pose has been perfectly replicated. Do not let modifiers change the pose itself.
-            5.  **Background:** The output MUST be a high-quality PNG of the character on a minimal, flat white background. No gradients, scenes, or props.
-            6.  **Error Handling:**
-                - If the Pose Reference image does not contain a clear human figure to extract a pose from, you MUST fail and respond with the exact error text: "Pose detection failed".
-                - If the Pose Reference contains multiple people, focus on the most prominent, centered figure. Do not merge poses.
+        // The backend returns the image data in a property called 'imageData'.
+        return result.imageData;
 
-            **User Prompt for Modifiers:** "${userPrompt}"
-        `;
-        parts.push({ inlineData: { mimeType: poseImage.mimeType, data: poseImage.data } });
-        parts.push({ text: instructionPrompt });
-    } else { // mode === 'text'
-        instructionPrompt = `
-            You are an expert character artist. Your task is to generate a new image of a character based on a text description of a pose.
-
-            **Critical Rules:**
-            1.  **Identity Lock:** The provided image is the **Base Character (Rex)**. This is the ONLY reference for the character's identity, face, art style, proportions, outfit, and colors. You MUST preserve these features perfectly.
-            2.  **Pose Source:** The User Prompt is the ONLY source of information for the new pose. IGNORE any other images that might have been accidentally provided.
-            3.  **Execution:** Recreate the character from the Base Character Image in the new pose described by the user prompt.
-            4.  **Background:** The output MUST be a high-quality PNG of the character on a minimal, flat white background. No gradients, scenes, or props.
-
-            **User Prompt for Pose:** "${userPrompt}"
-        `;
-        parts.push({ text: instructionPrompt });
-    }
-    
-    const response = await ai.models.generateContent({
-        model: 'gemini-2.5-flash-image',
-        contents: { parts },
-        config: {
-            responseModalities: [Modality.IMAGE],
-        },
-    });
-
-    const firstPart = response.candidates?.[0]?.content?.parts?.[0];
-    if (firstPart?.text?.includes("Pose detection failed")) {
-        throw new Error("Pose detection failed — please upload a clearer pose reference image.");
-    }
-
-    for (const part of response.candidates[0].content.parts) {
-        if (part.inlineData) {
-            return part.inlineData.data;
+    } catch (error) {
+        console.error("Error calling backend function:", error);
+        // Re-throw the error so the UI can catch it and display a message to the user.
+        if (error instanceof Error) {
+            throw error;
         }
+        throw new Error("An unknown error occurred while communicating with the generation service.");
     }
-
-    throw new Error("No image was generated by the API. The model may have refused the request.");
 };
