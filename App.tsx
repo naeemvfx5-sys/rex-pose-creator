@@ -50,7 +50,8 @@ const App: React.FC = () => {
           setPoseDescription(description);
           setShowDescriptionEditor(true);
         } catch (err) {
-          setError("Could not generate pose description.");
+          const message = err instanceof Error ? err.message : "An unknown error occurred.";
+          setError(`Could not generate pose description: ${message}`);
           setShowDescriptionEditor(false);
         } finally {
           setIsPreviewLoading(false);
@@ -67,7 +68,8 @@ const App: React.FC = () => {
           setPoseDescription(description);
           setShowDescriptionEditor(true);
         } catch (err) {
-          setError("Could not generate pose description from image.");
+          const message = err instanceof Error ? err.message : "An unknown error occurred.";
+          setError(`Could not generate pose description from image: ${message}`);
           setShowDescriptionEditor(false);
         } finally {
           setIsPreviewLoading(false);
