@@ -25,7 +25,6 @@ const App: React.FC = () => {
   const [prompt, setPrompt] = useState<string>('');
   const [poseSourceMode, setPoseSourceMode] = useState<'text' | 'image' | null>(null);
   
-  // New state for the two-step generation process
   const [poseDescription, setPoseDescription] = useState<string>('');
   const [isPreviewLoading, setIsPreviewLoading] = useState<boolean>(false);
   const [showDescriptionEditor, setShowDescriptionEditor] = useState<boolean>(false);
@@ -34,12 +33,38 @@ const App: React.FC = () => {
   const [isLoading, setIsLoading] = useState<boolean>(false);
   const [error, setError] = useState<string | null>(null);
   
+  const [isKeyReady, setIsKeyReady] = useState<boolean>(false);
+
   const debouncedPrompt = useDebounce(prompt, 500);
   const debouncedPoseImage = useDebounce(poseImage, 500);
 
+  useEffect(() => {
+    const checkApiKey = async () => {
+        try {
+            if (window.aistudio && await window.aistudio.hasSelectedApiKey()) {
+                setIsKeyReady(true);
+            }
+        } catch (e) {
+            console.error("Error checking for API key:", e)
+        }
+    };
+    checkApiKey();
+  }, []);
+
+  const handleSelectKey = async () => {
+    try {
+        await window.aistudio.openSelectKey();
+        // Assume success to handle race condition where hasSelectedApiKey is not immediately true
+        setIsKeyReady(true);
+    } catch (e) {
+        console.error("Could not open API key selection:", e);
+        setError("Failed to open the API key selection dialog. Please try again.");
+    }
+  };
+
   // Effect to generate pose description preview
   useEffect(() => {
-    if (!poseSourceMode) return;
+    if (!poseSourceMode || !isKeyReady) return;
 
     const getPoseDescription = async () => {
       if (poseSourceMode === 'text' && debouncedPrompt.trim()) {
@@ -81,7 +106,7 @@ const App: React.FC = () => {
     };
     
     getPoseDescription();
-  }, [debouncedPrompt, debouncedPoseImage, poseSourceMode]);
+  }, [debouncedPrompt, debouncedPoseImage, poseSourceMode, isKeyReady]);
 
   const handleBaseImageUpload = (file: File) => {
     if (baseImage) {
@@ -103,7 +128,6 @@ const App: React.FC = () => {
   const handleDeleteBaseImage = () => {
     if (window.confirm("Are you sure you want to delete the permanent Rex reference? This action cannot be undone.")) {
       setBaseImage(null);
-      // Reset the entire app state
       setPoseImage(null);
       setPrompt('');
       setGeneratedImage(null);
@@ -118,7 +142,7 @@ const App: React.FC = () => {
       file,
       preview: URL.createObjectURL(file)
     });
-    setPrompt(''); // Clear text prompt when image is uploaded
+    setPrompt('');
   };
   
   const handleGenerate = useCallback(async () => {
@@ -128,7 +152,6 @@ const App: React.FC = () => {
     setError(null);
     setGeneratedImage(null);
     
-    // Internal Usage Log
     console.log({
       event: 'generation_start',
       timestamp: new Date().toISOString(),
@@ -137,7 +160,7 @@ const App: React.FC = () => {
     });
 
     let success = false;
-    for (let i = 0; i < 3 && !success; i++) { // Attempt up to 3 times (1 initial + 2 retries)
+    for (let i = 0; i < 3 && !success; i++) {
         if (i > 0) console.log(`Attempt ${i + 1} to generate pose...`);
         try {
             const poseImagePayload = (poseSourceMode === 'image' && poseImage) ? {
@@ -151,21 +174,23 @@ const App: React.FC = () => {
                 poseDescription: poseDescription
             });
             setGeneratedImage(`data:image/png;base64,${result}`);
-            success = true; // Break loop on success
+            success = true;
         } catch (err) {
             console.error(err);
             const errorMessage = (err instanceof Error) ? err.message : "An unknown error occurred.";
             
-            // Handle specific, non-retriable validation errors
-            if (errorMessage.includes("POSE_DETECTION_FAILED")) {
+            if (errorMessage.includes("Requested entity was not found.")) {
+                setError("Your API key is invalid or missing permissions. Please select a valid key.");
+                setIsKeyReady(false);
+                break;
+            } else if (errorMessage.includes("POSE_DETECTION_FAILED")) {
                 setError("Pose not detected clearly — try a clearer or single-person image.");
-                break; // Don't retry if pose detection fails
+                break;
             } else if (errorMessage.includes("MULTIPLE_PEOPLE_DETECTED")) {
                 setError("Multiple people detected — please crop to one person for best accuracy.");
-                break; // Don't retry for this error
+                break;
             }
             
-            // For generic errors, set message and allow loop to retry
             setError(`Failed to generate image (attempt ${i+1}). ${errorMessage}`);
         }
     }
@@ -212,6 +237,22 @@ const App: React.FC = () => {
     setPrompt('');
     setShowDescriptionEditor(false);
     setPoseDescription('');
+  }
+
+  if (!isKeyReady) {
+    return (
+        <div className="min-h-screen bg-gray-50 flex flex-col items-center justify-center p-4 text-center">
+            <div className="w-full max-w-md bg-white p-8 rounded-2xl shadow-lg border border-gray-200">
+                 <h1 className="text-3xl font-bold text-gray-800 mb-4">Welcome to Rex Pose Creator</h1>
+                 <p className="text-gray-600 mb-6">To get started, please select a Gemini API key. Your key is stored securely and is required to power the AI generation features.</p>
+                 <Button onClick={handleSelectKey} className="w-full">Select API Key to Continue</Button>
+                 <p className="text-xs text-gray-500 mt-4">
+                    For more information on billing, see the <a href="https://ai.google.dev/gemini-api/docs/billing" target="_blank" rel="noopener noreferrer" className="text-indigo-600 hover:underline">Gemini API documentation</a>.
+                 </p>
+                 {error && <p className="text-red-600 bg-red-100 p-3 rounded-lg mt-4 font-medium">{error}</p>}
+            </div>
+        </div>
+    );
   }
 
   return (
