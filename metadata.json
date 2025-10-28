@@ -1,0 +1,5 @@
+{
+  "name": "Rex Pose Creator",
+  "description": "An application that allows a user to upload a character image and then transform it into new poses using either a text prompt or a reference pose image, while maintaining the original character's identity and art style.",
+  "requestFramePermissions": []
+}
