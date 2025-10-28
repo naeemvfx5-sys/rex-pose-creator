@@ -1,4 +1,3 @@
-
 import { GoogleGenAI, Modality, Part } from "@google/genai";
 
 type ImagePayload = {
@@ -13,13 +12,14 @@ type GenerateOptions = {
 }
 
 const getAiClient = () => {
-    // IMPORTANT: For personal use only.
-    // Replace "YOUR_API_KEY_HERE" with your actual Gemini API key.
+    // IMPORTANT: Since this app runs directly in the browser without a build step,
+    // we must hardcode the API key here.
     const API_KEY = "AIzaSyB4nFStA1VbchE8fLXLf10F-t2bWY9t9Dg";
 
-    if (API_KEY === "AIzaSyB4nFStA1VbchE8fLXLf10F-t2bWY9t9Dg") {
-        throw new Error("Please replace 'YOUR_API_KEY_HERE' with your actual Gemini API key in services/geminiService.ts");
+    if (!API_KEY || API_KEY === "YOUR_API_KEY_HERE") {
+        throw new Error("API key not configured. Please add your Gemini API key to services/geminiService.ts");
     }
+    
     return new GoogleGenAI({ apiKey: API_KEY });
 }
 
@@ -48,7 +48,7 @@ export const generatePoseDescription = async (
         contents: { parts }
     });
 
-    return response.text.trim();
+    return (response.text ?? '').trim();
 };
 
 
@@ -101,7 +101,7 @@ export const generatePose = async (
     });
     
     // Check for text-based error responses first
-    const responseText = response.text.trim();
+    const responseText = (response.text ?? '').trim();
     if (responseText) {
         if (responseText.includes("POSE_DETECTION_FAILED")) {
             throw new Error("POSE_DETECTION_FAILED: The model could not detect a clear pose in the reference image.");

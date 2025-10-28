@@ -153,8 +153,9 @@ const App: React.FC = () => {
             console.error(err);
             const errorMessage = (err instanceof Error) ? err.message : "An unknown error occurred.";
             
+            // FIX: Updated the API key error message to be more user-friendly and not direct users to edit source code, aligning with API key handling guidelines.
             if (errorMessage.includes("Requested entity was not found.")) {
-                setError("Your API key seems to be invalid. Please double-check the key in services/geminiService.ts.");
+                setError("Failed to generate image due to an API authentication error. Please contact support if this issue persists.");
                 break;
             } else if (errorMessage.includes("POSE_DETECTION_FAILED")) {
                 setError("Pose not detected clearly — try a clearer or single-person image.");
